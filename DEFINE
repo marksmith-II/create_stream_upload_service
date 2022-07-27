@@ -1,0 +1,20 @@
+method DEFINE.
+    super->DEFINE( ).
+
+
+DATA: lo_entity     type REF TO  /IWBEP/IF_MGW_ODATA_ENTITY_TYP,
+
+lo_property type REF TO  /IWBEP/IF_MGW_ODATA_PROPERTY.
+
+lo_entity = model->GET_ENTITY_TYPE( IV_ENTITY_NAME = 'Upload_Doc' ). "Entity Name
+
+IF lo_entity is BOUND.
+
+lo_property = lo_entity->GET_PROPERTY( IV_PROPERTY_NAME = 'DocName' ). "Key Value(SLUG)
+
+lo_property->SET_AS_CONTENT_TYPE( ).
+
+
+ENDIF.
+
+  endmethod.
