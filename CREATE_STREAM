@@ -1,0 +1,303 @@
+METHOD /iwbep/if_mgw_appl_srv_runtime~create_stream.
+*************************************************************************************
+* This method creates DMS Documents via upload feature 
+* Author: M. Smith 4/20/22, Mindset Consulting
+*
+*************************************************************************************
+
+    DATA : documentdata  TYPE  bapi_doc_draw2,
+           documentdatax TYPE  bapi_doc_drawx2,
+           docnumber     TYPE  bapi_doc_draw2-documentnumber,
+           doctype       TYPE  bapi_doc_draw2-documenttype,
+           docpart       TYPE  bapi_doc_draw2-documentpart,
+           docversion    TYPE  bapi_doc_draw2-documentversion,
+           return        TYPE  bapiret2,
+           filename      TYPE  dbmsgora-filename,
+           pure_filename TYPE  sdbah-actid,
+           pure_ext      TYPE  sdbad-funct,
+           file          TYPE  cvapi_doc_file,
+           api_cntl      TYPE  cvapi_api_control,
+           binlen        TYPE  i,
+           drao          TYPE  drao,
+           msg           TYPE  messages,
+           file_name     TYPE  char50,
+           files         TYPE TABLE OF cvapi_doc_file,
+           draos         TYPE TABLE OF drao,
+           file_format   TYPE string,
+           slug_split    TYPE string,
+
+
+* Short Texts
+           drat          TYPE TABLE OF bapi_doc_drat,
+* Object links & Classification
+           drads         TYPE TABLE OF bapi_doc_drad,
+           drad          TYPE bapi_doc_drad,
+           doc           TYPE zcl_zsd_os_revop_attac_mpc=>ts_upload_doc,
+           classes       TYPE TABLE OF bapi_class_allocation,
+           class         TYPE  bapi_class_allocation,
+           character     TYPE TABLE OF bapi_characteristic_values,
+           charac        TYPE bapi_characteristic_values.
+
+
+    TYPES: BEGIN OF zst_ts_raw_line,
+             line(2550) TYPE x,
+           END OF zst_ts_raw_line.
+
+
+    DATA: wa_bintab TYPE zst_ts_raw_line,
+          bintab    TYPE  zst_ts_raw_line, 
+          bintabs   TYPE TABLE OF zst_ts_raw_line.
+
+
+    DATA: tech_request              TYPE REF TO /iwbep/cl_mgw_request,
+          request_header_patient    TYPE string,
+          request_header_doctype    TYPE bapi_doc_draw2-documenttype,
+          request_header_class      TYPE classname,
+          request_header_classtype  TYPE bapi_class_allocation-classtype,
+          request_header_char1      TYPE bapi_characteristic_values-charname,
+          request_header_char1value TYPE bapi_characteristic_values-charvalue,
+          request_header_char2      TYPE bapi_characteristic_values-charname,
+          request_header_char2value TYPE bapi_characteristic_values-charvalue,
+          request_header_char3      TYPE bapi_characteristic_values-charname,
+          request_header_char3value TYPE bapi_characteristic_values-charvalue,
+          request_header_char4      TYPE bapi_characteristic_values-charname,
+          request_header_char4value TYPE bapi_characteristic_values-charvalue,
+          request_header_char5      TYPE bapi_characteristic_values-charname,
+          request_header_char5value TYPE bapi_characteristic_values-charvalue.
+
+
+*    " Added for testing purpose, will have to remove
+    DATA(request_headers) = io_tech_request_context->get_request_headers( ).
+    TRY.
+        request_header_patient = request_headers[ name = 'patient' ]-value.
+        request_header_doctype = request_headers[ name = 'doctype' ]-value.
+        request_header_class = request_headers[ name = 'class' ]-value.
+        request_header_classtype = request_headers[ name = 'classtype' ]-value.
+        request_header_char1 = request_headers[ name = 'char1' ]-value.
+        request_header_char1value = request_headers[ name = 'char1value' ]-value.
+
+        request_header_char2 = request_headers[ name = 'char2' ]-value.
+        request_header_char2value = request_headers[ name = 'char2value' ]-value.
+
+        request_header_char3 = request_headers[ name = 'char3' ]-value.
+        request_header_char3value = request_headers[ name = 'char3value' ]-value.
+
+        request_header_char4 = request_headers[ name = 'char4' ]-value.
+        request_header_char4value = request_headers[ name = 'char4value' ]-value.
+
+        request_header_char5 = request_headers[ name = 'char5' ]-value.
+        request_header_char5value = request_headers[ name = 'char5value' ]-value.
+
+      CATCH cx_sy_itab_line_not_found.
+    ENDTRY.
+
+* Function Module to split and get file name and extension
+    CALL FUNCTION 'SPLIT_FILENAME'
+      EXPORTING
+        long_filename  = filename
+      IMPORTING
+        pure_filename  = pure_filename
+        pure_extension = pure_ext.
+
+* Allocate document data
+    documentdata-documenttype = request_header_doctype.
+    documentdata-documentversion = '00'.
+    documentdata-documentpart = '000'.
+    documentdata-description = iv_slug. "filename.
+    documentdata-createdate = sy-datum.
+    documentdata-username = sy-uname.
+    documentdata-wsapplication1 = pure_ext.
+    documentdata-wsapplication2 = pure_ext.
+
+
+* Check original 1 into the SAP data base at the same time
+    REFRESH files.
+    CLEAR files.
+
+    CALL FUNCTION 'BAPI_DOCUMENT_CREATE2'
+      EXPORTING
+        documentdata         = documentdata
+        pf_ftp_dest          = 'SAPFTPA'
+        pf_http_dest         = 'SAPHTTPA'
+      IMPORTING
+        documenttype         = doctype
+        documentnumber       = docnumber
+        documentpart         = docpart
+        documentversion      = docversion
+        return               = return
+      TABLES
+        documentdescriptions = drat
+        objectlinks          = drads
+*       characteristicvalues = character
+        documentfiles        = files.
+
+    IF return-type CA 'EA'.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+
+    ELSE.
+
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+
+      CALL FUNCTION 'SCMS_XSTRING_TO_BINARY'
+        EXPORTING
+          buffer        = is_media_resource-value
+
+        IMPORTING
+          output_length = binlen
+        TABLES
+          binary_tab    = bintabs.
+
+**FIELD-SYMBOLS: TYPE bintab.
+      LOOP AT bintabs INTO bintab.
+        CLEAR drao.
+        drao-orblk = bintab-line.
+        drao-orln = binlen.
+        APPEND drao TO draos.
+      ENDLOOP.
+
+* Grab file format from slug
+       split iv_slug at '.' into slug_split file_format .
+* Convert file_format to all caps
+    TRANSLATE file_format TO UPPER CASE.
+
+* Pass SLUG value
+      file_name = iv_slug. "filename.
+      file-updateflag = 'I'.
+      file-dappl = file_format. " need to be able to pass jpeg or png
+      file-storage_cat = 'ZDMSNOVO'.
+      file-filename = file_name.
+      file-checked_in = 'X'.
+      APPEND file TO files.
+
+
+      api_cntl-no_update_task = 'X'.
+
+
+      CALL FUNCTION 'CVAPI_DOC_CHECKIN'
+        EXPORTING
+          pf_dokar           = request_header_doctype
+          pf_doknr           = docnumber
+          pf_dokvr           = docversion
+          pf_doktl           = docpart
+          pf_hostname        = 'DEFAULT'
+          ps_api_control     = api_cntl
+          pf_replace         = 'X'
+          pf_content_provide = 'TBL'
+          pf_ftp_dest        = 'SAPFTPA'
+          pf_http_dest       = 'SAPHTTPA'
+        IMPORTING
+          psx_message        = msg
+        TABLES
+          pt_files_x         = files
+          pt_content         = draos.
+
+
+*Object Linking
+      drad-objecttype = 'KNA1'.
+      drad-objectkey  = request_header_patient.
+      APPEND drad TO drads.
+* Class Assignment
+      class-classtype =  request_header_classtype.
+      class-classname = request_header_class.
+      APPEND class TO classes.
+
+* Characteristics
+if request_header_char1 is not INITIAL.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = request_header_char1.
+      charac-charvalue = request_header_char1value.
+      INSERT charac INTO TABLE character.
+      endif.
+
+if request_header_doctype ne'A06'.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = 'CREATED_ON_DATE'.
+      charac-charvalue = sy-datum.
+      INSERT charac INTO TABLE character.
+      endif.
+
+if request_header_char2 is NOT INITIAL.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = request_header_char2.
+      charac-charvalue = request_header_char2value.
+      INSERT charac INTO TABLE character.
+endif.
+
+if request_header_char3 is NOT INITIAL.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = request_header_char3.
+      charac-charvalue = request_header_char3value.
+      INSERT charac INTO TABLE character.
+endif.
+
+if request_header_char4 is NOT INITIAL.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = request_header_char4.
+      charac-charvalue = request_header_char4value.
+      INSERT charac INTO TABLE character.
+endif.
+
+if request_header_char5 is NOT INITIAL.
+      charac-classtype = request_header_classtype.
+      charac-classname = request_header_class.
+      charac-charname = request_header_char5.
+      charac-charvalue = request_header_char5value.
+      INSERT charac INTO TABLE character.
+endif.
+      CLEAR return.
+      CLEAR documentdatax.
+
+
+* BAPI to add Objectlink, Class & Characteristics
+      CALL FUNCTION 'BAPI_DOCUMENT_CHANGE2'
+        EXPORTING
+          documenttype         = request_header_doctype
+          documentnumber       = docnumber
+          documentpart         = docpart
+          documentversion      = docversion
+          documentdata         = documentdata
+          documentdatax        = documentdatax
+*         HOSTNAME             = 'DEFAULT'
+*         DOCBOMCHANGENUMBER   =
+*         DOCBOMVALIDFROM      =
+*         DOCBOMREVISIONLEVEL  =
+*         SENDCOMPLETEBOM      = ' '
+          pf_ftp_dest          = 'SAPFTPA'
+          pf_http_dest         = 'SAPHTTPA '
+*         CAD_MODE             = ' '
+*         ACCEPT_EMPTY_BOM     = ' '
+        IMPORTING
+          return               = return
+        TABLES
+          characteristicvalues = character
+          classallocations     = classes
+*         DOCUMENTDESCRIPTIONS =
+          objectlinks          = drads
+*         DOCUMENTSTRUCTURE    =
+*         DOCUMENTFILES        =
+*         LONGTEXTS            =
+*         COMPONENTS           =
+        .
+
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+
+
+      copy_data_to_ref(
+        EXPORTING
+          is_data = doc
+        CHANGING
+          cr_data = er_entity ).
+    ENDIF.
+
+
+  ENDMETHOD.
+
